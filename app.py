@@ -1,7 +1,3 @@
-"""
-Streamlit Gmail Mail Merge — Corrected with Email Auto-Filtering
-"""
-
 import streamlit as st
 import pandas as pd
 import base64
@@ -15,143 +11,136 @@ from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from googleapiclient.errors import HttpError
 
+# ========================================
+# Streamlit Page Setup
+# ========================================
 st.set_page_config(page_title="Gmail Mail Merge", layout="wide")
+st.title("📧 Gmail Mail Merge Tool")
+
+# ========================================
+# Gmail API Setup
+# ========================================
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
-# --------------------------
-# Helper: load client config
-# --------------------------
+# Load client secrets from Streamlit secrets
+CLIENT_CONFIG = {
+    "web": {
+        "client_id": st.secrets["gmail"]["client_id"],
+        "client_secret": st.secrets["gmail"]["client_secret"],
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "redirect_uris": [st.secrets["gmail"]["redirect_uri"]],
+    }
+}
 
-def load_client_config():
-    try:
-        gmail = st.secrets["gmail"]
-        client_id = gmail["client_id"]
-        client_secret = gmail["client_secret"]
-        redirect_uri = gmail.get("redirect_uri", "http://localhost:8501/")
-        client_config = {
-            "web": {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        }
-        return client_config, redirect_uri
-    except Exception:
-        st.error("Missing gmail client details in Streamlit secrets. Add [gmail] client_id and client_secret.")
-        st.stop()
+# ========================================
+# Smart Email Extractor
+# ========================================
+EMAIL_REGEX = re.compile(r"[\w\.-]+@[\w\.-]+\.\w+")
 
-# --------------------------
-# Email helpers
-# --------------------------
-EMAIL_REGEX = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
+def extract_email(value: str):
+    """Extracts the first valid email from a string, or None if not found."""
+    if not value:
+        return None
+    match = EMAIL_REGEX.search(str(value))
+    return match.group(0) if match else None
 
-def create_message(sender, to, subject, message_text):
-    to_clean = str(to).strip()
-    if not EMAIL_REGEX.match(to_clean):
-        raise ValueError(f"Invalid email address: {to_clean}")
-
-    msg = MIMEText(message_text, "plain")
-    msg["to"] = to_clean
-    msg["from"] = sender
-    msg["subject"] = subject
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+# ========================================
+# Gmail Helpers
+# ========================================
+def create_message(to, subject, body):
+    message = MIMEText(body)
+    message["to"] = to
+    message["subject"] = subject
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     return {"raw": raw}
 
-# --------------------------
-# UI
-# --------------------------
-st.title("📧 Gmail Mail Merge — Streamlit")
-client_config, redirect_uri = load_client_config()
+def send_email(service, to, subject, body):
+    message = create_message(to, subject, body)
+    return service.users().messages().send(userId="me", body=message).execute()
 
-# --------------------------
-# OAuth Authentication
-# --------------------------
-query_params = st.experimental_get_query_params()
-if "code" in query_params:
-    code = query_params["code"][0]
-    flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
-    flow.fetch_token(code=code)
-    creds = flow.credentials
-    st.session_state["creds"] = creds.to_json()
-    st.experimental_set_query_params()  # clear code
-    st.success("✅ Authentication successful!")
-
+# ========================================
+# OAuth Flow
+# ========================================
 if "creds" not in st.session_state:
-    flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
-    auth_url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
-    st.markdown(f"[Click here to authenticate with Google]({auth_url})")
-    st.stop()
+    st.session_state["creds"] = None
 
-creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
-if creds.expired and creds.refresh_token:
-    creds.refresh(Request())
-    st.session_state["creds"] = creds.to_json()
-
-service = build("gmail", "v1", credentials=creds)
-
-# --------------------------
-# Upload CSV and email template
-# --------------------------
-uploaded = st.file_uploader("Upload CSV file with email addresses", type=["csv", "xlsx"])
-
-if uploaded is not None:
-    try:
-        if uploaded.name.lower().endswith(".csv"):
-            df = pd.read_csv(uploaded)
-        else:
-            df = pd.read_excel(uploaded)
-    except Exception as e:
-        st.error(f"Failed to read file: {e}")
+if st.session_state["creds"]:
+    creds = Credentials.from_authorized_user_info(
+        json.loads(st.session_state["creds"]), SCOPES
+    )
+else:
+    code = st.experimental_get_query_params().get("code", None)
+    if code:
+        flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
+        flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
+        flow.fetch_token(code=code[0])
+        creds = flow.credentials
+        st.session_state["creds"] = creds.to_json()
+        st.experimental_rerun()
+    else:
+        flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
+        flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
+        auth_url, _ = flow.authorization_url(prompt="consent")
+        st.markdown(
+            f"### 🔑 Please [authorize the app]({auth_url}) to send emails using your Gmail account."
+        )
         st.stop()
 
-    st.success(f"Loaded {len(df)} contacts")
-    st.dataframe(df.head(20))
+# Build Gmail API client
+creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
+service = build("gmail", "v1", credentials=creds)
 
-    email_col = st.selectbox("Select email column", options=list(df.columns), index=0)
-    st.markdown("Use placeholders in the template that match your column names, e.g., {name}, {company}.")
-    subject = st.text_input("Email subject", value="Hello {name}")
-    body = st.text_area("Email body", height=200, value="Dear {name},\n\nThis is a test email.\n\nRegards,\nYour team")
+# ========================================
+# Upload Recipients
+# ========================================
+st.header("📤 Upload Recipient List")
+uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx"])
 
-    batch_size = st.number_input("Batch size", min_value=1, max_value=100, value=20)
-    pause_sec = st.number_input("Pause seconds between batches", min_value=0, max_value=10, value=2)
-    send_button = st.button("🚀 Send emails")
+if uploaded_file:
+    if uploaded_file.name.endswith("csv"):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
 
-    if send_button:
-        total = len(df)
-        sent = 0
+    st.write("✅ Preview of uploaded data:")
+    st.dataframe(df.head())
+
+    # ========================================
+    # Email Template
+    # ========================================
+    st.header("✍️ Compose Your Email")
+    subject_template = st.text_input("Subject", "Hello {Name}")
+    body_template = st.text_area("Body", "Dear {Name},\n\nThis is a test mail.\n\nRegards,\nYour Company")
+
+    if st.button("🚀 Send Emails"):
+        sent_count = 0
+        skipped = []
         errors = []
-        invalids = []
-        progress = st.progress(0)
 
-        for i, row in df.iterrows():
-            to_addr = str(row[email_col]).strip()
+        for idx, row in df.iterrows():
+            to_addr_raw = str(row.get("Email", "")).strip()
+            to_addr = extract_email(to_addr_raw)
 
-            # Skip invalid emails automatically
-            if not EMAIL_REGEX.match(to_addr):
-                invalids.append(to_addr)
+            if not to_addr:
+                skipped.append(to_addr_raw)
                 continue
 
-            context = row.to_dict()
+            subject = subject_template.format(**row)
+            body = body_template.format(**row)
+
             try:
-                formatted_subject = subject.format(**context)
-                formatted_body = body.format(**context)
-                msg = create_message("me", to_addr, formatted_subject, formatted_body)
-                service.users().messages().send(userId="me", body=msg).execute()
-                sent += 1
-                progress.progress(min(1.0, sent / total))
-            except HttpError as he:
-                errors.append((to_addr, str(he)))
+                send_email(service, to_addr, subject, body)
+                sent_count += 1
+                time.sleep(1)  # Pause to avoid Gmail quota issues
+            except Exception as e:
+                errors.append((to_addr, str(e)))
 
-            if (i + 1) % batch_size == 0:
-                time.sleep(pause_sec)
-
-        st.success(f"Done. Sent: {sent}. Errors: {len(errors)}. Invalid emails skipped: {len(invalids)}")
-
-        if invalids:
-            st.warning("Skipped invalid emails:")
-            st.write(invalids[:20])  # show first 20 invalids
-
+        # ========================================
+        # Final Summary
+        # ========================================
+        st.success(f"✅ Successfully sent {sent_count} emails.")
+        if skipped:
+            st.warning(f"⚠️ Skipped {len(skipped)} invalid emails: {skipped}")
         if errors:
-            st.error("Errors (first 10):")
-            st.write(errors[:10])
+            st.error(f"❌ Failed to send {len(errors)} emails: {errors}")
