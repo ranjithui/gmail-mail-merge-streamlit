@@ -22,7 +22,6 @@ st.title("📧 Gmail Mail Merge Tool")
 # ========================================
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
-# Load client secrets from Streamlit secrets
 CLIENT_CONFIG = {
     "web": {
         "client_id": st.secrets["gmail"]["client_id"],
@@ -77,7 +76,7 @@ else:
         flow.fetch_token(code=code[0])
         creds = flow.credentials
         st.session_state["creds"] = creds.to_json()
-        st.experimental_rerun()
+        st.rerun()  # ✅ fixed (was st.experimental_rerun)
     else:
         flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
         flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
@@ -132,7 +131,7 @@ if uploaded_file:
             try:
                 send_email(service, to_addr, subject, body)
                 sent_count += 1
-                time.sleep(1)  # Pause to avoid Gmail quota issues
+                time.sleep(1)  # pause to avoid Gmail quota issues
             except Exception as e:
                 errors.append((to_addr, str(e)))
 
