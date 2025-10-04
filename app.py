@@ -1,5 +1,5 @@
 """
-Streamlit Gmail Mail Merge — Fully Fixed Automatic OAuth
+Streamlit Gmail Mail Merge — Fully Corrected and Ready for Deployment
 """
 
 import streamlit as st
@@ -7,6 +7,7 @@ import pandas as pd
 import base64
 import time
 import re
+import json
 from email.mime.text import MIMEText
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -69,7 +70,6 @@ client_config, redirect_uri = load_client_config()
 query_params = st.experimental_get_query_params()
 if "code" in query_params:
     code = query_params["code"][0]
-    # Recreate Flow for this code
     flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
     flow.fetch_token(code=code)
     creds = flow.credentials
@@ -78,13 +78,11 @@ if "code" in query_params:
     st.success("✅ Authentication successful!")
 
 if "creds" not in st.session_state:
-    # Start OAuth flow
     flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
     auth_url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
     st.markdown(f"[Click here to authenticate with Google]({auth_url})")
     st.stop()
 
-# Load credentials
 creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
 if creds.expired and creds.refresh_token:
     creds.refresh(Request())
