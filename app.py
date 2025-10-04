@@ -1,5 +1,5 @@
 """
-Streamlit Gmail Mail Merge — Fully Corrected and Ready for Deployment
+Streamlit Gmail Mail Merge — Corrected with Email Auto-Filtering
 """
 
 import streamlit as st
@@ -121,10 +121,17 @@ if uploaded is not None:
         total = len(df)
         sent = 0
         errors = []
+        invalids = []
         progress = st.progress(0)
 
         for i, row in df.iterrows():
-            to_addr = row[email_col]
+            to_addr = str(row[email_col]).strip()
+
+            # Skip invalid emails automatically
+            if not EMAIL_REGEX.match(to_addr):
+                invalids.append(to_addr)
+                continue
+
             context = row.to_dict()
             try:
                 formatted_subject = subject.format(**context)
@@ -133,18 +140,18 @@ if uploaded is not None:
                 service.users().messages().send(userId="me", body=msg).execute()
                 sent += 1
                 progress.progress(min(1.0, sent / total))
-                st.write(f"✅ Sent to {to_addr}")
-            except ValueError as ve:
-                st.warning(f"Skipping {to_addr}: {ve}")
-                errors.append((to_addr, str(ve)))
             except HttpError as he:
-                st.error(f"Failed to send to {to_addr}: {he}")
                 errors.append((to_addr, str(he)))
 
             if (i + 1) % batch_size == 0:
                 time.sleep(pause_sec)
 
-        st.success(f"Done. Sent: {sent}. Errors: {len(errors)}")
+        st.success(f"Done. Sent: {sent}. Errors: {len(errors)}. Invalid emails skipped: {len(invalids)}")
+
+        if invalids:
+            st.warning("Skipped invalid emails:")
+            st.write(invalids[:20])  # show first 20 invalids
+
         if errors:
-            st.write("Errors (first 10):")
+            st.error("Errors (first 10):")
             st.write(errors[:10])
