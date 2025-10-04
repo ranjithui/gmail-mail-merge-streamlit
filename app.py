@@ -1,17 +1,13 @@
 """
-Streamlit Gmail Mail Merge — Updated with Automatic OAuth Handling
+Streamlit Gmail Mail Merge — Fully Fixed Automatic OAuth
 """
 
 import streamlit as st
 import pandas as pd
 import base64
-import io
-import json
 import time
 import re
-from urllib.parse import urlencode, parse_qs
 from email.mime.text import MIMEText
-
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -45,20 +41,6 @@ def load_client_config():
         st.stop()
 
 # --------------------------
-# OAuth functions
-# --------------------------
-
-def start_oauth_flow(client_config, redirect_uri):
-    flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
-    auth_url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
-    return flow, auth_url
-
-
-def exchange_code_for_creds(flow, code):
-    flow.fetch_token(code=code)
-    return flow.credentials
-
-# --------------------------
 # Email helpers
 # --------------------------
 EMAIL_REGEX = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
@@ -81,21 +63,28 @@ def create_message(sender, to, subject, message_text):
 st.title("📧 Gmail Mail Merge — Streamlit")
 client_config, redirect_uri = load_client_config()
 
-# Handle OAuth automatically
-if "creds" not in st.session_state:
-    if "code" in st.experimental_get_query_params():
-        code = st.experimental_get_query_params()["code"][0]
-        flow = st.session_state.get("flow")
-        creds = exchange_code_for_creds(flow, code)
-        st.session_state["creds"] = creds.to_json()
-        st.experimental_set_query_params()  # clear code from URL
-        st.success("✅ Authentication successful!")
-    else:
-        flow, auth_url = start_oauth_flow(client_config, redirect_uri)
-        st.session_state["flow"] = flow
-        st.markdown(f"[Click here to authenticate with Google]({auth_url})")
-        st.stop()
+# --------------------------
+# OAuth Authentication
+# --------------------------
+query_params = st.experimental_get_query_params()
+if "code" in query_params:
+    code = query_params["code"][0]
+    # Recreate Flow for this code
+    flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    st.session_state["creds"] = creds.to_json()
+    st.experimental_set_query_params()  # clear code
+    st.success("✅ Authentication successful!")
 
+if "creds" not in st.session_state:
+    # Start OAuth flow
+    flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
+    auth_url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
+    st.markdown(f"[Click here to authenticate with Google]({auth_url})")
+    st.stop()
+
+# Load credentials
 creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
 if creds.expired and creds.refresh_token:
     creds.refresh(Request())
