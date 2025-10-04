@@ -76,7 +76,7 @@ else:
         flow.fetch_token(code=code[0])
         creds = flow.credentials
         st.session_state["creds"] = creds.to_json()
-        st.rerun()  # ✅ fixed (was st.experimental_rerun)
+        st.rerun()
     else:
         flow = Flow.from_client_config(CLIENT_CONFIG, scopes=SCOPES)
         flow.redirect_uri = st.secrets["gmail"]["redirect_uri"]
@@ -112,6 +112,10 @@ if uploaded_file:
     subject_template = st.text_input("Subject", "Hello {Name}")
     body_template = st.text_area("Body", "Dear {Name},\n\nThis is a test mail.\n\nRegards,\nYour Company")
 
+    # Delay Option
+    st.header("⏱️ Sending Options")
+    delay = st.number_input("Delay between emails (seconds)", min_value=0, max_value=60, value=2, step=1)
+
     if st.button("🚀 Send Emails"):
         sent_count = 0
         skipped = []
@@ -131,7 +135,7 @@ if uploaded_file:
             try:
                 send_email(service, to_addr, subject, body)
                 sent_count += 1
-                time.sleep(1)  # pause to avoid Gmail quota issues
+                time.sleep(delay)  # ✅ custom delay between emails
             except Exception as e:
                 errors.append((to_addr, str(e)))
 
