@@ -1,5 +1,5 @@
 """
-Streamlit Gmail Mail Merge — Updated with Email Validation
+Streamlit Gmail Mail Merge — Updated with Automatic OAuth Handling
 """
 
 import streamlit as st
@@ -9,7 +9,7 @@ import io
 import json
 import time
 import re
-from urllib.parse import urlencode
+from urllib.parse import urlencode, parse_qs
 from email.mime.text import MIMEText
 
 from google_auth_oauthlib.flow import Flow
@@ -24,6 +24,7 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 # --------------------------
 # Helper: load client config
 # --------------------------
+
 def load_client_config():
     try:
         gmail = st.secrets["gmail"]
@@ -46,6 +47,7 @@ def load_client_config():
 # --------------------------
 # OAuth functions
 # --------------------------
+
 def start_oauth_flow(client_config, redirect_uri):
     flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
     auth_url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
@@ -79,7 +81,28 @@ def create_message(sender, to, subject, message_text):
 st.title("📧 Gmail Mail Merge — Streamlit")
 client_config, redirect_uri = load_client_config()
 
-# OAuth authentication UI code (same as before, omitted for brevity)
+# Handle OAuth automatically
+if "creds" not in st.session_state:
+    if "code" in st.experimental_get_query_params():
+        code = st.experimental_get_query_params()["code"][0]
+        flow = st.session_state.get("flow")
+        creds = exchange_code_for_creds(flow, code)
+        st.session_state["creds"] = creds.to_json()
+        st.experimental_set_query_params()  # clear code from URL
+        st.success("✅ Authentication successful!")
+    else:
+        flow, auth_url = start_oauth_flow(client_config, redirect_uri)
+        st.session_state["flow"] = flow
+        st.markdown(f"[Click here to authenticate with Google]({auth_url})")
+        st.stop()
+
+creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
+if creds.expired and creds.refresh_token:
+    creds.refresh(Request())
+    st.session_state["creds"] = creds.to_json()
+
+service = build("gmail", "v1", credentials=creds)
+
 # --------------------------
 # Upload CSV and email template
 # --------------------------
@@ -108,17 +131,6 @@ if uploaded is not None:
     send_button = st.button("🚀 Send emails")
 
     if send_button:
-        if "creds" not in st.session_state:
-            st.error("Please authenticate first.")
-            st.stop()
-
-        creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds"]), SCOPES)
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            st.session_state["creds"] = creds.to_json()
-
-        service = build("gmail", "v1", credentials=creds)
-
         total = len(df)
         sent = 0
         errors = []
