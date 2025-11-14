@@ -1,8 +1,7 @@
-# Gmail Mail Merge Tool - Modern UI Edition (with 4 Follow-ups Template Selector)
-# -------------------------------------------------------------------------------
-# Drop this file into your Streamlit app environment. It expects the same
-# st.secrets keys you already had for Gmail: gmail.client_id, gmail.client_secret, gmail.redirect_uri
-# -------------------------------------------------------------------------------
+# ========================================
+# Gmail Mail Merge Tool - Modern UI Edition
+# (Encoding Fix + Draft Default 110 + Reply Draft Support + ETA) with AI template suggestion
+# ========================================
 import streamlit as st
 import pandas as pd
 import base64
@@ -19,18 +18,20 @@ from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+# NEW: OpenAI import for optional scanner (safe if missing)
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
+
 # ========================================
-# Page setup
+# Streamlit Page Setup
 # ========================================
 st.set_page_config(page_title="Gmail Mail Merge", layout="wide")
 
 # Sidebar
 with st.sidebar:
-    # optional: replace logo.png with your asset or comment out
-    try:
-        st.image("logo.png", width=180)
-    except Exception:
-        pass
+    st.image("logo.png", width=180)
     st.markdown("---")
     st.markdown("### 📧 Gmail Mail Merge Tool")
     st.markdown("A powerful Gmail-based mail merge app with batch send, resume, and follow-up support.")
@@ -42,6 +43,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption("Developed by Ranjith")
 
+# Main Header
 st.markdown("<h1 style='text-align:center;'>📧 Gmail Mail Merge Tool</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align:center;color:gray;'>with Follow-up Replies, Draft Save & Resume Support</p>", unsafe_allow_html=True)
 st.markdown("---")
@@ -67,50 +69,85 @@ CLIENT_CONFIG = {
 }
 
 # ========================================
-# Constants / Files
+# Constants
 # ========================================
 DONE_FILE = "/tmp/mailmerge_done.json"
 BATCH_SIZE_DEFAULT = 50
-DRAFT_BATCH_SIZE_DEFAULT = 110  # default for draft mode
+DRAFT_BATCH_SIZE_DEFAULT = 110  # default batch for draft mode
 
 # ========================================
-# Predefined Follow-up Templates (4 Follow-ups)
+# Predefined Follow-up Templates (added)
 # ========================================
 FOLLOW_UP_TEMPLATES = {
     "Follow 1": """Hi {First Name},
 
-Just checking in to see if you had a chance to review my earlier message.
+Hope you’ve been doing well. Would you like to get a **few sample contacts** to check our list accuracy?
 
-Thanks,  
-**Your Company**""",
+Please let me know your requirements.
 
-    "Follow 2": """Hi {First Name},
+Thanks For your Time,
+**William**
+Business Development Manager | Streamline Data
+""",
 
-I wanted to follow up again in case my previous email got buried.
+"Follow 2": """Hi {First Name},
 
-Let me know if you'd like more details.
+Have you reviewed my previous email? 
 
-Best,  
-**Your Company**""",
+Let me know your thoughts.
 
-    "Follow 3": """Hi {First Name},
+Thanks For your Time,
+**William**
+Business Development Manager | Streamline Data
+""",
 
-Wanted to touch base again to see if this might still be relevant for you.
+    "Follow 3": """  Hi {First Name},
 
-Happy to help whenever you're ready.
+I wanted to circle back on my last message. Would you like to see a **few sample contacts** to have an idea on our database
 
-Regards,  
-**Your Company**""",
+Looking forward to hearing from you.
+
+Thanks For your Time,
+**William**
+Business Development Manager | Streamline Data
+""",
+
 
     "Follow 4": """Hi {First Name},
 
-This will be my final follow-up — just wanted to check one last time.
+This is my final follow , **May be you're missed my previous Mails**  if you’d like me to send over a sample list of verified  decision-makers for your review.
 
-If you're open, I can send a quick sample or more details.
+Looking forward to your response.
 
-Thanks for your time,  
-**Your Company**""",
+Thanks For your Time,
+**William**
+Business Development Manager | Streamline Data
+""",
 }
+
+# ========================================
+# Recovery Logic
+# ========================================
+if os.path.exists(DONE_FILE) and not st.session_state.get("done", False):
+    try:
+        with open(DONE_FILE, "r") as f:
+            done_info = json.load(f)
+        file_path = done_info.get("file")
+        if file_path and os.path.exists(file_path):
+            st.success("✅ Previous mail merge completed successfully.")
+            st.download_button(
+                "⬇️ Download Updated CSV",
+                data=open(file_path, "rb"),
+                file_name=os.path.basename(file_path),
+                mime="text/csv",
+            )
+            if st.button("🔁 Reset for New Run"):
+                os.remove(DONE_FILE)
+                st.session_state.clear()
+                st.experimental_rerun()
+            st.stop()
+    except Exception:
+        pass
 
 # ========================================
 # Helpers
@@ -126,7 +163,6 @@ def extract_email(value: str):
 def convert_bold(text):
     if not text:
         return ""
-    # convert markdown-like bold and links and newlines -> HTML
     text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
     text = re.sub(
         r"\[(.*?)\]\((https?://[^\s)]+)\)",
@@ -188,34 +224,7 @@ def fetch_message_id_header(service, message_id):
     return ""
 
 # ========================================
-# Recovery Logic (previous run)
-# ========================================
-if os.path.exists(DONE_FILE) and not st.session_state.get("done", False):
-    try:
-        with open(DONE_FILE, "r") as f:
-            done_info = json.load(f)
-        file_path = done_info.get("file")
-        if file_path and os.path.exists(file_path):
-            st.success("✅ Previous mail merge completed successfully.")
-            st.download_button(
-                "⬇️ Download Updated CSV",
-                data=open(file_path, "rb"),
-                file_name=os.path.basename(file_path),
-                mime="text/csv",
-            )
-            if st.button("🔁 Reset for New Run"):
-                try:
-                    os.remove(DONE_FILE)
-                except Exception:
-                    pass
-                st.session_state.clear()
-                st.experimental_rerun()
-            st.stop()
-    except Exception:
-        pass
-
-# ========================================
-# OAuth Flow (simple)
+# OAuth Flow
 # ========================================
 if "creds" not in st.session_state:
     st.session_state["creds"] = None
@@ -242,19 +251,12 @@ creds = Credentials.from_authorized_user_info(json.loads(st.session_state["creds
 service = build("gmail", "v1", credentials=creds)
 
 # ========================================
-# Session defaults
+# Session Setup
 # ========================================
 if "sending" not in st.session_state:
     st.session_state["sending"] = False
 if "done" not in st.session_state:
     st.session_state["done"] = False
-if "body_template" not in st.session_state:
-    st.session_state["body_template"] = """Hi {First Name},
-
-Welcome to **Mail Merge App** demo.
-
-Thanks,  
-**Your Company**"""
 
 # ========================================
 # MAIN UI
@@ -275,7 +277,6 @@ if not st.session_state["sending"]:
         else:
             df = pd.read_excel(uploaded_file)
 
-        # ensure columns for follow logic and metadata
         for col in ["ThreadId", "RfcMessageId", "Status"]:
             if col not in df.columns:
                 df[col] = ""
@@ -285,48 +286,121 @@ if not st.session_state["sending"]:
         df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
         st.markdown("---")
-        # -----------------------------
-        # Step 2: Email Template + Follow-ups selector
-        # -----------------------------
         st.subheader("🧩 Step 2: Email Template")
 
-        # Option: radio to select which follow template to load
-        selected_template = st.radio(
-            "📌 Choose a Template to load (Custom keeps editor contents)",
+        # --- NEW: Follow-up Template Selector (non-invasive insertion) ---
+        # initialize persistent editor state if missing
+        if "body_template" not in st.session_state:
+            st.session_state["body_template"] = """Hi {First Name},
+
+Welcome to **Mail Merge App** demo.
+
+Thanks,  
+**Your Company**"""
+
+        selected_follow = st.radio(
+            "📌 Load a follow-up template (select 'Custom' to keep editor contents)",
             ["Custom", "Follow 1", "Follow 2", "Follow 3", "Follow 4"],
             horizontal=True
         )
 
-        # If user picks a follow template, update session body_template
-        if selected_template != "Custom":
-            st.session_state.body_template = FOLLOW_UP_TEMPLATES[selected_template]
+        # Only update the editor when user chooses a follow template (non-destructive)
+        if selected_follow != "Custom":
+            # set session body_template from predefined templates
+            st.session_state["body_template"] = FOLLOW_UP_TEMPLATES.get(selected_follow, st.session_state["body_template"])
+        # --- END NEW BLOCK ---
 
-        # Subject template (single subject field). If you want per-follow subjects, I can add that.
-        subject_template = st.text_input("✉️ Subject", st.session_state.get("subject_template", "{Name Company}"))
-        st.session_state["subject_template"] = subject_template  # persist
+        # ==========================================================
+        # OPTIONAL FEATURE: AI TEMPLATE SCANNER (Non-intrusive)
+        # ==========================================================
+        # This expander is completely optional and does not modify your editor or mail-merge flow.
+        # It uses OpenAI GPT if OPENAI_API_KEY is present in st.secrets.
+        with st.expander("🤖 AI Template Spam Scanner (Optional)", expanded=False):
+            st.caption("Paste any template to scan for spam triggers, deliverability risks and suggestions. This will not change your editor automatically.")
+            ai_input = st.text_area("Paste template to scan", height=200, key="ai_template_scanner_input")
 
+            if st.button("Scan Template with AI", key="ai_scan_button"):
+                if not ai_input.strip():
+                    st.warning("Please paste a template first.")
+                else:
+                    if OpenAI is None:
+                        st.error("OpenAI client library not available. Install openai-python or provide OpenAI SDK.")
+                    else:
+                        # try to get API key from st.secrets
+                        api_key = st.secrets.get("OPENAI_API_KEY") if isinstance(st.secrets, dict) or hasattr(st.secrets, "get") else None
+                        # handle Streamlit secrets object which supports dict-like access
+                        if not api_key:
+                            # also support st.secrets["OPENAI_API_KEY"] usage safely
+                            try:
+                                api_key = st.secrets["OPENAI_API_KEY"]
+                            except Exception:
+                                api_key = None
+
+                        if not api_key:
+                            st.error("❌ AI API key not found. Add OPENAI_API_KEY to st.secrets to enable scanning.")
+                        else:
+                            try:
+                                ai_client = OpenAI(api_key=api_key)
+                                with st.spinner("Analyzing template with AI…"):
+                                    prompt = f"""
+You are an expert in email deliverability.
+
+Analyze the email below and return a structured response containing:
+- Spam Trigger Words Detected (if any)
+- Deliverability Score (0-100)
+- Problems / Risks
+- Specific Words/Phrases to Avoid
+- Concrete Suggestions to Improve Deliverability & Tone
+- Safer Rewritten Version of the Template (no more than 300 words)
+
+Email:
+{ai_input}
+"""
+                                    resp = ai_client.chat.completions.create(
+                                        model="gpt-4o-mini",
+                                        messages=[{"role": "user", "content": prompt}],
+                                        temperature=0.2,
+                                    )
+                                    # best-effort extraction of response text
+                                    try:
+                                        result_text = resp.choices[0].message.content
+                                    except Exception:
+                                        # fallback for different SDK shapes
+                                        result_text = getattr(resp, "text", str(resp))
+
+                                    st.markdown("### 📊 AI Analysis Result")
+                                    st.write(result_text)
+                            except Exception as e:
+                                st.error(f"AI Error: {e}")
+
+        subject_template = st.text_input("✉️ Subject", "{Company Name}")
         body_template = st.text_area(
-            "📝 Body (Markdown + Variables like {First Name})",
-            st.session_state["body_template"],
-            height=300,
+            "📝 Body (Markdown + Variables like {Name})",
+            st.session_state.get("body_template", """Hi {First Name},
+
+Welcome to **Mail Merge App** demo.
+
+Thanks,  
+**Your Company**"""),
+            height=250,
         )
-        # persist the possibly edited body_template so it doesn't reset on re-run
+        # persist any manual edits to the body back to session_state
         st.session_state["body_template"] = body_template
 
-        # label, delay, send mode
-        label_name = st.text_input("🏷️ Gmail label", "Mail Merge Sent")
-        delay = st.slider("⏱️ Delay between emails (seconds)", 5, 120, 20)
+        label_name = st.text_input("🏷️ Gmail label", "enter a label name")
+        delay = st.slider("⏱️ Delay between emails (seconds)", 20, 75, 20)
         send_mode = st.radio("📬 Choose send mode", ["🆕 New Email", "↩️ Follow-up (Reply)", "💾 Save as Draft"])
 
-        # Preview using first row
         if not df.empty:
-            preview_row = df.iloc[0].to_dict()
+            preview_row = df.iloc[0]
             try:
                 preview_subject = subject_template.format(**preview_row)
                 preview_body = convert_bold(body_template.format(**preview_row))
-            except Exception:
+            except Exception as e:
                 preview_subject = subject_template
-                preview_body = convert_bold(body_template)
+                preview_body = body_template
+                st.warning(f"⚠️ Could not render preview: {e}")
+
             st.markdown("---")
             st.subheader("👀 Step 3: Preview (First Row)")
             st.markdown(f"**Subject:** {preview_subject}")
@@ -350,7 +424,7 @@ if not st.session_state["sending"]:
             st.rerun()
 
 # ========================================
-# Sending Mode
+# Sending Mode with Progress + ETA
 # ========================================
 if st.session_state["sending"]:
     df = st.session_state["df"]
@@ -382,7 +456,7 @@ if st.session_state["sending"]:
 
         row = df.loc[idx]
 
-        pct = int(((i + 1) / total) * 100) if total > 0 else 100
+        pct = int(((i + 1) / total) * 100)
         progress.progress(min(max(pct, 0), 100))
 
         # --- ETA calculation ---
@@ -403,7 +477,6 @@ if st.session_state["sending"]:
             continue
 
         try:
-            # Render subject/body for this row
             subject = subject_template.format(**row)
             body_html = convert_bold(body_template.format(**row))
             message = MIMEText(body_html, "html")
@@ -413,8 +486,7 @@ if st.session_state["sending"]:
             msg_body = {}
             thread_id = str(row.get("ThreadId", "")).strip()
             rfc_id = str(row.get("RfcMessageId", "")).strip()
-            if send_mode == "↩️ Follow-up (Reply)" and thread_id and rfc_id:
-                # build reply headers
+            if thread_id and rfc_id:
                 message["In-Reply-To"] = rfc_id
                 message["References"] = rfc_id
                 raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
@@ -424,6 +496,7 @@ if st.session_state["sending"]:
                 msg_body = {"raw": raw}
 
             if send_mode == "💾 Save as Draft":
+                # Draft mode works for both new emails and replies
                 service.users().drafts().create(userId="me", body={"message": msg_body}).execute()
                 df.loc[idx, "Status"] = "Draft"
             else:
@@ -443,7 +516,7 @@ if st.session_state["sending"]:
             errors.append((to_addr, str(e)))
             st.error(f"❌ Error for {to_addr}: {e}")
 
-    # Labeling for sent messages
+    # Label + Backup
     if send_mode != "💾 Save as Draft" and sent_message_ids and label_id:
         try:
             service.users().messages().batchModify(
@@ -487,10 +560,7 @@ if st.session_state["done"]:
     if summary.get("skipped"):
         st.warning(f"⚠️ Skipped: {summary['skipped']}")
     if st.button("🔁 New Run / Reset"):
-        try:
-            if os.path.exists(DONE_FILE):
-                os.remove(DONE_FILE)
-        except Exception:
-            pass
+        if os.path.exists(DONE_FILE):
+            os.remove(DONE_FILE)
         st.session_state.clear()
         st.experimental_rerun()
